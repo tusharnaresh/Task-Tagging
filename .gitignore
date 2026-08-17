@@ -1,0 +1,8 @@
+node_modules/
+out/
+.env
+*.log
+
+# Raw API captures. These contain live customer conversations — never commit them.
+scratch/
+*.raw.json

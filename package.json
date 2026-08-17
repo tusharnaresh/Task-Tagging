@@ -1,0 +1,25 @@
+{
+  "name": "ds-task-normalizer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fetches DistributedSource task details + comment history by task id and emits normalized, plain-text task objects.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "normalize": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  }
+}

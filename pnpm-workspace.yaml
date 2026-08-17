@@ -1,0 +1,5 @@
+# pnpm 11 reads build-script approval from here, not from the "pnpm" field in package.json.
+# esbuild ships a platform binary and must be allowed to run its install script, otherwise
+# `pnpm test` aborts on a dependency check before vitest ever starts.
+allowBuilds:
+  esbuild: true
