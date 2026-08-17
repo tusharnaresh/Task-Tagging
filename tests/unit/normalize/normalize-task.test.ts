@@ -97,6 +97,30 @@ describe('TaskNormalizer', () => {
 		expect(normalize([systemNotice]).comments[0]).toMatchObject({ speakerRole: 'system', roleBasis: 'system-message' });
 	});
 
+	it('keeps an image-only turn in the timeline as a placeholder', () => {
+		const imageOnly = buildEntry({
+			interactionId: 'entry-image',
+			subType: ['note'],
+			createdDate: 1,
+			ownerName: 'Tony C',
+			historyComments: '<p><img src="https://example.com/screenshot.png" width="640" height="480"></p>',
+		});
+
+		expect(normalize([imageOnly]).comments[0].text).toBe('[image]');
+	});
+
+	it('still records the image when the entry text was consumed as a system message', () => {
+		const systemPlusImage = buildEntry({
+			interactionId: 'entry-system-image',
+			subType: ['note'],
+			createdDate: 1,
+			historyComments: '<p>Auto assigned to Jamie L</p><p><img src="https://example.com/a.png"></p>',
+		});
+
+		const texts = normalize([systemPlusImage]).comments.map((comment) => comment.text);
+		expect(texts).toContain('[image]');
+	});
+
 	it('reads resolutionComments when it holds the only human text', () => {
 		const { comments } = normalize([resolutionOnly]);
 

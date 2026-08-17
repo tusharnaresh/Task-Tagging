@@ -279,7 +279,10 @@ export const extractTurnsFromEntry = (historyEntry: InteractionEntry): ExtractEn
 					isSystemMessage: isSystemMessageText(strippedText),
 					sourceField,
 				});
-			} else if (!strippedText && hasImage(historyHtml)) {
+			} else if (hasImage(historyHtml)) {
+				// Reached whenever the text branch did not fire — including when the entry's only text
+				// was already emitted as a system message. Mirrors the original's `imageRefs.length > 0`
+				// fallback so an image-only turn keeps its slot in the timeline either way.
 				turns.push({ speakerName: ownerName ?? 'Unknown', text: IMAGE_PLACEHOLDER, isSystemMessage: false, sourceField });
 			}
 

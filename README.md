@@ -30,6 +30,15 @@ taskId → POST /getATask_v2                    task record (title, type, open, 
 Measured on one real 189-comment task: **11.6 MB of raw history → 145 KB of normalized JSON**,
 zero HTML tags or entities surviving, 100% of turns attributed.
 
+### Coverage caveat
+
+That task exercised the email and plain-note paths heavily (60 DS email wrappers, 59 quoted-reply
+trims) but contained **no chat transcripts** — only 2 of its 189 entries carried a `<label>`, each
+with a single speaker, and no entry used the `<small>` turn boundary. So the multi-speaker path —
+`<label>` splitting, speaker classification, truncated-name repair — is covered by unit tests
+against synthetic markup, not yet by real data. Run a task with a chat transcript through it
+before trusting transcript attribution.
+
 ## Output
 
 ```jsonc
