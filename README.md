@@ -1,9 +1,9 @@
 # ds-task-normalizer
 
-Takes DistributedSource task ids and a JWT. Emits one normalized, plain-text task object per id.
+Takes DistributedSource task ids and a JWT. Emits one prompt-ready conversation transcript per id.
 
-Stops at the normalized task. No LLM, no analysis, no contacts, no images — those belong to a
-later stage that reads this output.
+Stops at the transcript. No LLM, no analysis, no contacts, no images — those belong to a later
+stage that reads this output.
 
 ```bash
 cp .env.example .env      # put your FullAuth JWT in DS_ACCESS_TOKEN
@@ -24,11 +24,60 @@ taskId → POST /getATask_v2                    task record (title, type, open, 
        → HTML → plain text                    tags, styles, signatures, tracking pixels, images
        → trim quoted reply chains             the same thread text repeated in every reply
        → attribute each turn                  client / agent / system / unknown
-       → out/<taskId>.json
+       → render transcript                    drop scaffolding, envelopes, routing chatter, dupes
+       → out/<taskId>.txt
 ```
 
-Measured on one real 189-comment task: **11.6 MB of raw history → 145 KB of normalized JSON**,
-zero HTML tags or entities surviving, 100% of turns attributed.
+Measured on one real 189-comment task: **11.6 MB of raw history → 39.6 KB of transcript**
+(~10.1k tokens), zero HTML tags or entities surviving, 100% of turns attributed.
+
+## Output
+
+Default is `transcript` — what you feed an LLM:
+
+```
+TASK: Integration Update
+EMAIL SUBJECT: Re: Integration Update
+TASK TYPE: inbound-service-call
+STATUS: closed
+CONVERSATION: 143 messages
+
+[2026-03-31 18:31] agent/note Derek Stimsonwood: If you receive this task, you may chat and assign…
+[2026-04-01 14:02] client/inboundemail Jake Wharton: Thanks Derek! This is super helpful! A couple…
+```
+
+`--format json` gives the lossless object instead — every comment with `commentId`,
+`sourceInteractionId`, `roleBasis`, `quotedReplyTrimmed`, so a labelling decision can be traced
+back to its source entry. Use it for debugging and audit, not for prompting.
+
+### What the transcript removes, and why
+
+Measured on the same 189-comment task, JSON `142 KB / ~36.4k tokens` → transcript
+`39.6 KB / ~10.1k tokens`, **72% smaller**, with every substantive turn intact.
+
+| Removed | Cost in JSON | Reason |
+|---|---|---|
+| `sourceInteractionId`, `commentId` | 21.3 KB | Raw UUIDs. `commentId` is literally `sourceInteractionId:sequence`. |
+| `createdAt` or `createdDate` | 5.2 KB | Exact duplicates of each other; one survives. |
+| `sourceField`, `roleBasis`, `quotedReplyTrimmed`, `sequence` | 17.7 KB | Provenance about *our* processing, plus an index the array already encodes. |
+| Email envelope headers | 7.4 KB | 59 emails, **one** distinct subject, and in 59/59 the `From:` value was already in `speakerName`. Subject is stated once in the header. |
+| Duplicate messages | 2.6 KB | Same text emitted more than once. |
+| Routing shorthand | ~0.9 KB | `AR Received`, `Sending to Derek`, `pulled from inbox… per the pinned note`. |
+
+The routing rule is a **strip, not a drop**. 45 of 58 such notes open with the shorthand and then
+continue into the most substantive content on the task (`"- AR Received - Reviewing test webhook,
+it fails on the date field"`); only the 13 that are *nothing but* shorthand disappear. The byte
+saving is minor — the point is that `AR Received` appears ~30 times in one task and can drift a
+tagger toward acknowledgement/handoff themes on a task actually about an API integration.
+
+**Kept deliberately:** raw JSON contact payloads quoted inside emails (6.5 KB). They look like
+garbage, but on an integration task the field schema under discussion *is* the subject matter.
+
+**Task type is resolved to its name.** The record carries `type` as a bare UUID; the transcript
+prints `inbound-service-call`, `Cancel Request`, `Retention`. That is the strongest single prior
+about what a task is, and a UUID conveys none of it.
+
+`--keep-noise` turns every cleanup off in one flag — useful for seeing exactly what was removed.
 
 ### Coverage caveat
 
@@ -39,13 +88,13 @@ with a single speaker, and no entry used the `<small>` turn boundary. So the mul
 against synthetic markup, not yet by real data. Run a task with a chat transcript through it
 before trusting transcript attribution.
 
-## Output
+## The JSON form (`--format json`)
 
 ```jsonc
 {
   "taskId": "73a6ff24-…",
   "title": "Integration Update",
-  "taskType": "5b725b2e-…",          // task-type UUID, not a display name
+  "taskType": "5b725b2e-…",          // raw UUID; the transcript resolves it to a display name
   "accountId": "SEN42",
   "linkedAccount": "3da44301-…",
   "open": false,

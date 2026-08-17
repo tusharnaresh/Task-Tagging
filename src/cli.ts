@@ -4,11 +4,12 @@ import { dirname, join } from 'node:path';
 import { DsAuthError, DsClient } from './client/ds-client.ts';
 import { describeTokenExpiry, loadConfig } from './config.ts';
 import { TaskNormalizer } from './normalize/normalize-task.ts';
+import { renderTranscript } from './render/transcript.ts';
 import type { NormalizedTask } from './types.ts';
 
 const USAGE = `
-Fetch DistributedSource tasks by id and emit normalized, plain-text task objects.
-Stops at the normalized task — no LLM, no analysis.
+Fetch DistributedSource tasks by id and emit a prompt-ready conversation transcript.
+Stops at the transcript — no LLM, no analysis.
 
 Usage
   pnpm normalize <taskId> [<taskId> ...] [options]
@@ -16,13 +17,24 @@ Usage
 
 Options
   --ids-file <path>   newline-separated task ids ('#' starts a comment)
-  --out-dir <dir>     one <taskId>.json per task, default ./out
-  --stdout            write a single JSON array to stdout instead of files
+  --out-dir <dir>     one file per task, default ./out
+  --format <f>        transcript (default) | json — see below
+  --keep-noise        transcript only: keep envelope headers, routing chatter and duplicates
+  --stdout            write to stdout instead of files
   --token <jwt>       FullAuth JWT; defaults to DS_ACCESS_TOKEN
   --apikey <id>       parent DS account id, default SEN42
   --sub-type <name>   server-side filter, e.g. inboundemail. Off by default — see below
   --page-size <n>     history page size, default 50
   --help
+
+Formats
+  transcript  <taskId>.txt — what you feed an LLM. Drops per-comment scaffolding (UUIDs, derived
+              ids, provenance flags), repeated email envelope headers, internal routing shorthand
+              and duplicate messages; resolves the task-type UUID to its name. Measured on a
+              189-comment task: 142KB -> 39.6KB, ~36.4k tokens -> ~10.1k, every substantive turn
+              intact.
+  json        <taskId>.json — lossless. Every comment with provenance, so a labelling decision can
+              be traced back to its source entry. Use for debugging and audit.
 
 Sub-type filtering
   The history API honours a server-side 'subType' filter, but the useful selection is "every
@@ -35,10 +47,14 @@ Token
   expiry surfaces as an auth error naming the task it died on.
 `;
 
+type OutputFormat = 'transcript' | 'json';
+
 interface Args {
 	taskIds: string[];
 	idsFile: string | null;
 	outDir: string;
+	format: OutputFormat;
+	keepNoise: boolean;
 	toStdout: boolean;
 	token: string | null;
 	apikey: string | null;
@@ -52,6 +68,8 @@ const parseArgs = (argv: string[]): Args => {
 		taskIds: [],
 		idsFile: null,
 		outDir: './out',
+		format: 'transcript',
+		keepNoise: false,
 		toStdout: false,
 		token: null,
 		apikey: null,
@@ -87,6 +105,17 @@ const parseArgs = (argv: string[]): Args => {
 				break;
 			case '--out-dir':
 				args.outDir = readValue();
+				break;
+			case '--format': {
+				const value = readValue();
+				if (value !== 'transcript' && value !== 'json') {
+					throw new Error(`--format must be transcript or json, received "${value}".`);
+				}
+				args.format = value;
+				break;
+			}
+			case '--keep-noise':
+				args.keepNoise = true;
 				break;
 			case '--stdout':
 				args.toStdout = true;
@@ -160,28 +189,51 @@ const main = async () => {
 	}
 
 	const client = new DsClient(config);
-	const results: NormalizedTask[] = [];
+	const jsonResults: NormalizedTask[] = [];
+	const transcripts: string[] = [];
 	let failures = 0;
+
+	// `--keep-noise` turns every cleanup off at once, which is the useful shape: it answers "what
+	// did the renderer remove?" in one run rather than making the caller toggle three flags.
+	const transcriptOptions = args.keepNoise
+		? { stripEnvelopeHeaders: false, stripRoutingChatter: false, dedupe: false }
+		: {};
 
 	for (const [index, taskId] of taskIds.entries()) {
 		const label = `[${index + 1}/${taskIds.length}] ${taskId}`;
 
 		try {
 			const normalized = await normalizeOneTask(client, taskId);
-
-			if (args.toStdout) {
-				results.push(normalized);
-			} else {
-				const outPath = join(args.outDir, `${taskId}.json`);
-				mkdirSync(dirname(outPath), { recursive: true });
-				writeFileSync(outPath, JSON.stringify(normalized, null, 2));
-			}
-
 			const { commentsEmitted, historyEntries, roleCounts } = normalized.meta;
-			process.stderr.write(
-				`${label}: ${commentsEmitted} comments from ${historyEntries} entries ` +
-					`(client ${roleCounts.client}, agent ${roleCounts.agent}, system ${roleCounts.system}, unknown ${roleCounts.unknown})\n`
-			);
+			const roles = `client ${roleCounts.client}, agent ${roleCounts.agent}, system ${roleCounts.system}, unknown ${roleCounts.unknown}`;
+
+			if (args.format === 'json') {
+				if (args.toStdout) {
+					jsonResults.push(normalized);
+				} else {
+					const outPath = join(args.outDir, `${taskId}.json`);
+					mkdirSync(dirname(outPath), { recursive: true });
+					writeFileSync(outPath, JSON.stringify(normalized, null, 2));
+				}
+
+				process.stderr.write(`${label}: ${commentsEmitted} comments from ${historyEntries} entries (${roles})\n`);
+			} else {
+				const transcript = renderTranscript(normalized, transcriptOptions);
+
+				if (args.toStdout) {
+					transcripts.push(transcript.text);
+				} else {
+					const outPath = join(args.outDir, `${taskId}.txt`);
+					mkdirSync(dirname(outPath), { recursive: true });
+					writeFileSync(outPath, transcript.text);
+				}
+
+				process.stderr.write(
+					`${label}: ${transcript.commentsRendered} messages ` +
+						`(${transcript.commentsDropped} dropped as noise, ${historyEntries} history entries, ${roles}) ` +
+						`— ${(transcript.text.length / 1024).toFixed(1)}KB, ~${Math.round(transcript.text.length / 4)} tokens\n`
+				);
+			}
 		} catch (error) {
 			failures += 1;
 
@@ -197,7 +249,8 @@ const main = async () => {
 	}
 
 	if (args.toStdout) {
-		process.stdout.write(JSON.stringify(results, null, 2));
+		// Transcripts are separated by a rule so a multi-task dump stays readable as one document.
+		process.stdout.write(args.format === 'json' ? JSON.stringify(jsonResults, null, 2) : transcripts.join('\n\n---\n\n'));
 	}
 
 	if (failures > 0) {
