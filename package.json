@@ -9,6 +9,7 @@
   },
   "scripts": {
     "normalize": "tsx src/cli.ts",
+    "tag": "tsx src/tag/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -20,6 +21,9 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
-    "dotenv": "^16.4.7"
+    "@ai-sdk/openai": "^4.0.42",
+    "ai": "^7.0.66",
+    "dotenv": "^16.4.7",
+    "zod": "^4.4.3"
   }
 }
