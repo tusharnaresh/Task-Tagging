@@ -35,9 +35,15 @@ const ENVELOPE_HEADER = /^(?:From|Subject|To|Cc|Bcc)\s*:/i;
  * The byte saving is minor. The point is that "AR Received" appears ~30 times in one task, and a
  * tagger reading that repetition can drift toward acknowledgement/handoff themes on a task whose
  * actual subject is an API integration.
+ *
+ * The trailing lookahead is what keeps this from eating content. Several alternations are also the
+ * opening of an ordinary sentence — "Sent to collections for non-payment", "Assigned to Verizon
+ * port-out team", "PC Richards is the caller" — and without it the shorthand match swallowed the
+ * word carrying the subject. Shorthand is only shorthand when the line ends there or a separator
+ * follows; anything that runs straight on into prose is prose.
  */
 const ROUTING_CHATTER =
-	/(?:^|\n)\s*-?\s*(?:ar\s*(?:received|recieved|receied|rec'?d)|sent? to \w+|sending (?:back )?to \w+|chatt?ed(?: and assigned(?: the task)?(?: to \w+)?)?|assigned to \w+|pulled from inbox|pc \w+|per the pinned note|taking (?:a )?(?:scheduled )?break)\b[\s.,:-]*/gi;
+	/(?:^|\n)\s*-?\s*(?:ar\s*(?:received|recieved|receied|rec'?d)|sent? to \w+|sending (?:back )?to \w+|chatt?ed(?: and assigned(?: the task)?(?: to \w+)?)?|assigned to \w+|pulled from inbox|pc \w+|per the pinned note|taking (?:a )?(?:scheduled )?break)\b(?=\s*(?:$|[\n.,:;\-–—]))[\s.,:;\-–—]*/gi;
 
 export interface TranscriptOptions {
 	/**

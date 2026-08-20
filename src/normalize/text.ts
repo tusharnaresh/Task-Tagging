@@ -12,16 +12,26 @@ const NAMED_HTML_ENTITIES: Record<string, string> = {
 	quot: '"',
 };
 
+/**
+ * A numeric entity that names no character, left as its literal source text.
+ *
+ * `String.fromCodePoint` throws `RangeError` above U+10FFFF, and the throw propagates all the way
+ * out of the normalizer: one `&#x110000;` in one of a task's ~189 comments would otherwise lose the
+ * entire task rather than the one entity.
+ */
+const MAX_CODE_POINT = 0x10ffff;
+
+const fromCodePointOrLiteral = (codePoint: number, match: string) =>
+	Number.isNaN(codePoint) || codePoint < 0 || codePoint > MAX_CODE_POINT ? match : String.fromCodePoint(codePoint);
+
 export const decodeHtmlEntities = (input: string) =>
 	input.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity: string) => {
 		if (entity.startsWith('#x')) {
-			const codePoint = Number.parseInt(entity.slice(2), 16);
-			return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+			return fromCodePointOrLiteral(Number.parseInt(entity.slice(2), 16), match);
 		}
 
 		if (entity.startsWith('#')) {
-			const codePoint = Number.parseInt(entity.slice(1), 10);
-			return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+			return fromCodePointOrLiteral(Number.parseInt(entity.slice(1), 10), match);
 		}
 
 		return NAMED_HTML_ENTITIES[entity] ?? match;
@@ -42,6 +52,15 @@ const MARKUP_ONLY_ELEMENTS = /<(style|script|head)\b[^>]*>[\s\S]*?<\/\1>/gi;
  * comments. Re-escaping before the tag pass lets the entity decode restore them afterwards.
  */
 const BRACKETED_EMAIL = /<([^<>\s@]+@[^<>\s]+)>/g;
+
+/**
+ * A tag, comment or processing instruction — not every pair of angle brackets.
+ *
+ * `/<[^>]+>/` also deleted arithmetic: "x > 5 but plan cost < 100 per seat and y > 3" came out as
+ * "x > 5 but plan cost 3", losing the plan cost on exactly the kind of note that states one.
+ * Requiring a letter, `/`, `!` or `?` after the `<` leaves comparisons alone.
+ */
+const HTML_TAG = /<[/!?]?[a-zA-Z][^>]*>|<!--[\s\S]*?-->/g;
 
 /**
  * Invisible characters that survive naive cleaning and corrupt tokenisation and dedup.
@@ -72,7 +91,7 @@ export const stripHtmlTags = (input: string) =>
 			.replace(BRACKETED_EMAIL, '&lt;$1&gt;')
 			.replace(/<br\s*\/?>/gi, '\n')
 			.replace(/<\/p>/gi, '\n')
-			.replace(/<[^>]+>/g, ' ')
+			.replace(HTML_TAG, ' ')
 	)
 		.replace(EXOTIC_SPACES, ' ')
 		.replace(/[ \t]+\n/g, '\n')

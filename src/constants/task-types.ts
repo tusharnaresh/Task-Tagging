@@ -6,7 +6,10 @@
  * `Integrations Request` each frame the whole conversation. Resolved here so the prompt gets the
  * name and falls back to the UUID only for a type added after this snapshot.
  *
- * Mirrors `constants/task-types.ts` in ds-task-analyzer.
+ * Mirrors `constants/task-types.ts` in ds-task-analyzer, minus seven entries that are test junk
+ * left in the live DS list — `Test`, `test`, `Test Task`, `Test-Task type`, `deleteTaskType`,
+ * `rubix cube`, `LED task type test updated`. They resolve to null here rather than being rendered
+ * into a prompt as if they described the task. Do not re-import them from the analyzer snapshot.
  */
 export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'0a3fba6a-b090-41cf-bb2f-0a814dee10c3': 'Credit Ticket',
@@ -52,7 +55,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'573f6308-6667-4d26-a0a2-7ca1bb2d5835': 'Cancel Flag',
 	'316f9f24-e967-4f45-b8cd-3657271c9a2f': 'New Feature',
 	'734556de-0925-45f3-b623-198d468615f3': 'Bug',
-	'a88940c1-1ad1-4141-b9e6-d50b9a3e9e95': 'Test Task',
 	'e8971f66-f959-4ed4-b8dd-ffef5d409b3f': 'Plain',
 	'fb5f077b-baa3-461d-b3ac-abc5cf6fb0bf': 'Change Request',
 	'3186922f-7c12-4a81-949d-9ac927106053': 'Call Handling Feedback',
@@ -81,7 +83,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'd82e97fa-cec8-4c54-89d5-28f096bb60c8': 'Weekly Target',
 	'84b970ff-c6a4-4950-8088-65f324e3c521': 'No Auto Pay',
 	'2596f2b4-a8cf-46f2-a4fb-4b1684a5293a': 'No Plan Associated',
-	'430e7173-084c-4add-a9b3-08cb68481cbc': 'Test',
 	'11ad89b0-81e7-465f-b743-4cd036e122f8': 'Delay Billing',
 	'afbdd638-520a-4913-8353-dd2ff6050712': 'Six Months Review Due',
 	'2f763476-0061-49ec-9544-69f7b45a5aad': 'Annual Review Due',
@@ -145,7 +146,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'1957186f-455e-41f5-acf5-3f2edb0e887e': 'Two-way SMS Request',
 	'94842487-f8be-46fa-b5bf-989f5b7e4e7a': 'Introductory Period Check- In',
 	'9b3cc866-402f-41f9-8e67-c83ddce05019': 'First Annual Review',
-	'1c43018c-4769-43d1-85a1-1985954d0e39': 'test',
 	'aff36759-945c-426d-9870-8712cdd93dfc': 'Enable HIPAA Flow',
 	'b729b25f-3479-42a8-93e3-2ec2b5a819ef': 'Disable HIPAA Flow',
 	'4e19782b-2c88-4ef6-b1d4-0a9128791329': 'High Duration Calls',
@@ -161,7 +161,7 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'e4b92914-69f9-4221-abe0-991bd99906a2': 'Chennai Network Audit',
 	'd416b985-a832-4082-b064-36fed1d77678': 'Inventory Audit',
 	'211f01f2-3c14-4774-b0a8-35765e023fcb': 'Google Cloud Platform Audit',
-	'107f0cf5-05a3-4208-8b1f-91071ebfcd90': 'Headset  Check',
+	'107f0cf5-05a3-4208-8b1f-91071ebfcd90': 'Headset Check',
 	'8955b269-f1c1-4b9c-8cd3-68b81f406845': 'ChatSupport Service',
 	'cf38e41d-d853-4571-912d-6d301584f3b8': 'IT Monthly Audit',
 	'50a882c1-b623-4f6a-a3ff-df639e94bfa6': 'Billing - Other',
@@ -181,8 +181,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'6681d331-67d0-45f6-9b80-4de290a1f571': 'Furlough Leave',
 	'0a550947-23c2-43cd-ad66-a2e543ff03dd': 'Furlough Leave - Return',
 	'33f74e93-93d0-4c2d-b96f-0dc4e8844193': 'Duplicate Franchise Lead.',
-	'2ba83424-b2ea-4d2a-b202-20f4b0c6c1e8': 'Test-Task type',
-	'9138baff-19cb-44ba-b6da-2448cfb37645': 'deleteTaskType',
 	'11c0a632-2b68-4e5c-8458-082c2a7d415c': 'CBS Escalations',
 	'f3b50a61-e7df-46ec-82e0-17327d9940c8': 'WellReceived iOS Feedback',
 	'c20ec5ad-2df1-4ee3-b554-00ea6c1e3382': 'WellReceived Android Feedback',
@@ -190,7 +188,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'5d260d77-bee1-4c89-aa25-b6414c596a5a': 'Accounts Revival India',
 	'1781ebbf-4747-496a-9d06-999e56f9a19b': 'Remote Setup India',
 	'c29cc393-fedd-451a-9807-20ccdbe410e4': 'Remote Setup - India',
-	'1482fb7e-b89a-45a8-a0c8-9b712666e7ca': 'rubix cube',
 	'79f48336-8e47-4be0-8ced-aa1c5740a6e3': 'HIPAA Update Request',
 	'dbb161c6-0429-480c-95ce-53b670050a61': 'Process Out',
 	'8e2826c5-1284-424a-9925-cdeb69fc76e3': 'Location Follow-Up',
@@ -210,7 +207,6 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'bd42252a-c5f8-4c66-9c4f-25e5bf442244': 'Spanish Updates',
 	'646282e6-8821-42fd-a494-8529c4a15fb8': 'Setmore Beta Toggle - Off',
 	'a46adf2b-1edd-40a6-b10b-805372a7404a': 'Agent Feedback',
-	'50c7b9b6-732e-4d2e-b2e7-9fd5f0a91b01': 'LED task type test updated',
 	'8ac68076-e8bd-423f-97fc-be3701aac778': 'Account Deletion - Setmore iOS',
 	'92624a2c-f350-4cb1-90c9-3a04bb11df54': 'Returning Employee System Check',
 	'70a9357f-7f4a-4858-b514-be69fbb01a5c': 'Project 100 Monitoring',
@@ -222,6 +218,16 @@ export const DISTRIBUTED_SOURCE_TASK_TYPES = {
 	'10c8ccb2-1990-4ea7-8886-71ef3531002c': 'Integrations Request',
 } as const;
 
-/** Display name for a task-type UUID, or null when the type is not in this snapshot. */
-export const resolveTaskTypeName = (taskType: string | null): string | null =>
-	taskType ? (DISTRIBUTED_SOURCE_TASK_TYPES as Record<string, string>)[taskType] ?? null : null;
+/**
+ * Display name for a task-type UUID, or null when the type is not in this snapshot.
+ *
+ * `Object.hasOwn` rather than a bare index: a plain object read falls through to the prototype, so
+ * a `type` of `constructor` or `toString` would resolve to a function and be rendered as the name.
+ */
+export const resolveTaskTypeName = (taskType: string | null): string | null => {
+	if (!taskType || !Object.hasOwn(DISTRIBUTED_SOURCE_TASK_TYPES, taskType)) {
+		return null;
+	}
+
+	return (DISTRIBUTED_SOURCE_TASK_TYPES as Record<string, string>)[taskType];
+};

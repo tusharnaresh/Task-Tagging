@@ -216,15 +216,38 @@ const assertCacheIsWorking = (usage: TagUsage, call: number): void => {
 	}
 };
 
-/** Per-token rates for gpt-5.6-luna, for turning usage into money. */
-const RATE = { input: 0.2e-6, cached: 0.02e-6, write: 0.25e-6, output: 1.2e-6 };
+/** Per-token rates, by model. A model absent here has no rates, not default ones. */
+const RATES: Record<string, { input: number; cached: number; write: number; output: number }> = {
+	'gpt-5.6-luna': { input: 0.2e-6, cached: 0.02e-6, write: 0.25e-6, output: 1.2e-6 },
+};
 
-export const costOf = (usage: TagUsage): number => {
+/**
+ * Above this many input tokens OpenAI bills the WHOLE request at the long-context rate: 2x input,
+ * 1.5x output. Without the branch the reported cost understates a large transcript by roughly half.
+ */
+const LONG_CONTEXT_THRESHOLD = 272_000;
+const LONG_CONTEXT_INPUT_MULTIPLIER = 2;
+const LONG_CONTEXT_OUTPUT_MULTIPLIER = 1.5;
+
+/**
+ * Dollar cost of one request, or null when the model's rates are unknown.
+ *
+ * Null rather than a number computed from the default model's rates: a wrong figure that looks like
+ * a right one is worse than an absent one, and `--model` is user-overridable.
+ */
+export const costOf = (usage: TagUsage, model: string): number | null => {
+	const rate = RATES[model];
+	if (!rate) {
+		return null;
+	}
+
+	const longContext = usage.inputTokens > LONG_CONTEXT_THRESHOLD;
+	const inputMultiplier = longContext ? LONG_CONTEXT_INPUT_MULTIPLIER : 1;
+	const outputMultiplier = longContext ? LONG_CONTEXT_OUTPUT_MULTIPLIER : 1;
 	const uncachedInput = Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens);
+
 	return (
-		usage.cacheReadTokens * RATE.cached +
-		usage.cacheWriteTokens * RATE.write +
-		uncachedInput * RATE.input +
-		usage.outputTokens * RATE.output
+		(usage.cacheReadTokens * rate.cached + usage.cacheWriteTokens * rate.write + uncachedInput * rate.input) * inputMultiplier +
+		usage.outputTokens * rate.output * outputMultiplier
 	);
 };

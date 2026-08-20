@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveTaskTypeName } from '../../../src/constants/task-types.ts';
 import { renderTranscript } from '../../../src/render/transcript.ts';
 import type { NormalizedComment, NormalizedTask } from '../../../src/types.ts';
 
@@ -32,6 +33,8 @@ const task = (comments: NormalizedComment[]): NormalizedTask => ({
 		historyPages: 1,
 		commentsEmitted: comments.length,
 		droppedLogEntries: 0,
+		unreadStatusCount: 0,
+		unreadInfoFieldCount: 0,
 		unknownSubTypeCounts: {},
 		missingSubTypeCount: 0,
 		quotedRepliesTrimmed: 0,
@@ -158,5 +161,94 @@ describe('renderTranscript', () => {
 		const { text } = renderTranscript(task([comment({ text: 'The client asked whether we had assigned to Derek already.' })]));
 
 		expect(text).toContain('The client asked whether we had');
+	});
+});
+
+describe('routing chatter', () => {
+	const render = (text: string) => {
+		const comment = {
+			commentId: 'c:0',
+			sourceInteractionId: 'entry-1',
+			createdDate: 1_780_000_000_000,
+			createdAt: '2026-05-29T00:00:00.000Z',
+			speakerName: 'Tony C',
+			speakerRole: 'agent' as const,
+			roleBasis: 'sub-type' as const,
+			subType: 'note',
+			sourceField: 'historyComments' as const,
+			text,
+			quotedReplyTrimmed: false,
+			sequence: 0,
+		};
+		const task = {
+			taskId: 'task-1',
+			title: null,
+			taskType: null,
+			accountId: null,
+			linkedAccount: null,
+			open: null,
+			createdDate: null,
+			lastUpdatedDate: null,
+			comments: [comment],
+			meta: {
+				historyEntries: 1,
+				historyPages: 1,
+				commentsEmitted: 1,
+				droppedLogEntries: 0,
+				unknownSubTypeCounts: {},
+				missingSubTypeCount: 0,
+				unreadStatusCount: 0,
+				unreadInfoFieldCount: 0,
+				quotedRepliesTrimmed: 0,
+				roleCounts: { client: 0, agent: 1, system: 0, unknown: 0 },
+				warnings: [],
+				fetchedAt: '',
+			},
+		};
+
+		return renderTranscript(task).text;
+	};
+
+	it('strips shorthand that is the whole note', () => {
+		expect(render('AR Received')).not.toContain('AR Received');
+		expect(render('Sent to Derek')).not.toContain('Derek');
+	});
+
+	it('strips shorthand that opens a substantive note', () => {
+		const rendered = render('- AR Received - Reviewing test webhook in zap');
+
+		expect(rendered).toContain('Reviewing test webhook in zap');
+		expect(rendered).not.toContain('AR Received');
+	});
+
+	// The alternations matched a prefix of an ordinary sentence and took the sentence's subject with
+	// them: "Sent to collections" lost "collections", "PC Richards" lost the caller's name.
+	it('keeps the words that follow when the opening is prose, not shorthand', () => {
+		expect(render('Sent to collections for non-payment, account is 90 days in arrears')).toContain('collections for non-payment');
+		expect(render('Assigned to Verizon port-out team, ETA 5 days')).toContain('Verizon port-out team');
+		expect(render('PC Richards is the caller, they want a callback')).toContain('PC Richards');
+		expect(render('Taking a break from the integration until Q3')).toContain('break from the integration');
+	});
+});
+
+describe('task-type resolution', () => {
+	it('resolves a known UUID to its display name', () => {
+		expect(resolveTaskTypeName('10c8ccb2-1990-4ea7-8886-71ef3531002c')).toBe('Integrations Request');
+	});
+
+	it('returns null for a UUID outside the snapshot', () => {
+		expect(resolveTaskTypeName('00000000-0000-0000-0000-000000000000')).toBeNull();
+	});
+
+	// A bare index read falls through to the prototype, which rendered `TASK TYPE: function Object()`.
+	it('does not resolve inherited object properties', () => {
+		expect(resolveTaskTypeName('constructor')).toBeNull();
+		expect(resolveTaskTypeName('toString')).toBeNull();
+	});
+
+	// These are test rows left in the live DS list; rendering them describes the task falsely.
+	it('does not resolve the test-junk types that were stripped from the map', () => {
+		expect(resolveTaskTypeName('1482fb7e-b89a-45a8-a0c8-9b712666e7ca')).toBeNull();
+		expect(resolveTaskTypeName('9138baff-19cb-44ba-b6da-2448cfb37645')).toBeNull();
 	});
 });

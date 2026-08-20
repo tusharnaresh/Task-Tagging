@@ -2,8 +2,9 @@
 
 Takes DistributedSource task ids and a JWT. Emits one prompt-ready conversation transcript per id.
 
-Stops at the transcript. No LLM, no analysis, no contacts, no images — those belong to a later
-stage that reads this output.
+Two stages. `pnpm normalize` stops at the transcript — no analysis, no contacts, no images.
+`pnpm tag` is the LLM stage: it reads a transcript and returns one general and one specific tag
+from the CRM tagging vocabulary in `prompts/tag-task.md`.
 
 ```bash
 cp .env.example .env      # put your FullAuth JWT in DS_ACCESS_TOKEN
@@ -29,7 +30,9 @@ taskId → POST /getATask_v2                    task record (title, type, open, 
 ```
 
 Measured on one real 189-comment task: **11.6 MB of raw history → 39.6 KB of transcript**
-(~10.1k tokens), zero HTML tags or entities surviving, 100% of turns attributed.
+(~10.1k tokens), no HTML tags or entities surviving on that task, 100% of turns attributed.
+Entity decoding runs *after* tag stripping, so markup that arrived escaped
+(`&lt;div class=&quot;x&quot;&gt;`) re-materialises as literal text rather than being removed.
 
 ## Output
 
@@ -74,8 +77,10 @@ tagger toward acknowledgement/handoff themes on a task actually about an API int
 garbage, but on an integration task the field schema under discussion *is* the subject matter.
 
 **Task type is resolved to its name.** The record carries `type` as a bare UUID; the transcript
-prints `inbound-service-call`, `Cancel Request`, `Retention`. That is the strongest single prior
-about what a task is, and a UUID conveys none of it.
+prints `inbound-service-call`, `Cancel Request`, `Retention`. A UUID conveys none of that. The
+signal is uneven, which is why the prompt treats it as corroboration rather than evidence: some
+names map almost 1:1 to a tag (`Cancel Request`, `Spam Call Alert`), most are generic (`Other`,
+`To-do`, `Call`), and the seven test rows in the live DS list are not resolved at all.
 
 `--keep-noise` turns every cleanup off in one flag — useful for seeing exactly what was removed.
 
@@ -116,7 +121,69 @@ before trusting transcript attribution.
 ```
 
 Comments are ordered **oldest first**, though the API is queried newest-first — that ordering is
-the only one its cursor pagination is verified against.
+the only one its cursor pagination is verified against. An undated comment sorts to the *end*, not
+to the front where a zero timestamp would otherwise put it.
+
+`meta` also counts what the extractor did not read — `unknownSubTypeCounts`, `unreadStatusCount`,
+`unreadInfoFieldCount`. All three should be zero; a non-zero value means DS returned a shape this
+pipeline drops, and is worth looking at before trusting the transcript.
+
+## Tagging (`pnpm tag`)
+
+The second stage. It reads a transcript and returns one general and one specific tag from the
+vocabulary defined in `prompts/tag-task.md` — 14 generals, 87 specifics, parsed out of the prompt
+itself so the enum and the documentation cannot drift apart.
+
+```bash
+pnpm tag 73a6ff24-2e15-4e14-b3e9-87cbaabced65     # fetch, normalize and tag in one pass
+pnpm tag --from-file ./out/73a6ff24.txt           # tag a transcript already on disk
+```
+
+```
+--from-file <path>  tag an existing transcript instead of fetching the task. Repeatable, and
+                    needs no DS token
+--out-dir <dir>     also save each fetched transcript as <dir>/<taskId>.txt. Off unless given
+--effort <level>    none | low | medium | high | xhigh | max. Default low
+--model <id>        default gpt-5.6-luna. The reported cost is hardcoded to that model's rates,
+                    so it is fabricated for any other
+```
+
+`--out-dir` writes the *exact* text the model read, so a tag can be shown next to its evidence —
+useful for a demo or for arguing about a label. It is written **before** the model call, so a
+tagging failure still leaves the transcript on disk rather than throwing away the history fetch
+that produced it. `--from-file` inputs are skipped; they are already files.
+
+```bash
+pnpm tag 73a6ff24-2e15-4e14-b3e9-87cbaabced65 --out-dir ./demo
+```
+
+```
+{"taskId":"73a6ff24-…","general":"routing-and-delivery","specific":"integration"}
+  routing-and-delivery / integration  ·  144 msgs, 18026 in  ·  …  ·  $0.004029
+  transcript → demo/73a6ff24-2e15-4e14-b3e9-87cbaabced65.txt
+```
+
+Transcripts are live customer conversations. `out/`, `scratch/` and `demo/` are gitignored — point
+`--out-dir` at one of those, and add any new target to `.gitignore` before you run it.
+
+Needs `OPENAI_API_KEY` in `.env` alongside the DS token. Output is JSON lines on stdout, one object
+per task, so a batch can be piped straight into `jq`.
+
+### Measuring a run
+
+```bash
+pnpm tag --ids-file ./task-ids.txt > tagged.jsonl
+pnpm histogram < tagged.jsonl
+```
+
+Prints the null rate, the `-other` rate and the distribution of generals and specifics, against the
+proposal's own figures. A null rate above ~15%, or a general histogram that does not resemble the
+proposal's distribution, is evidence the prompt is tuned for precision where the deliverable needs
+recall.
+
+The prompt is cached: the cache key is a hash of the prompt file, so **any** edit to
+`prompts/tag-task.md` cold-starts the cache — one write at 1.25× the input rate before it pays for
+itself again. Batch prompt edits rather than shipping them one at a time.
 
 ## Auth
 
@@ -140,7 +207,12 @@ so making it work would buy nothing.
 **Never branch on HTTP status alone.** DS reports failure three different ways: the login HTML page
 (expired token), `200 {"success": false}` (session-scoped endpoint), and `200 {"status": false}`
 (`getATask_v2`). A client that trusts `response.ok` reads all three as success and emits empty
-output across a whole batch.
+output across a whole batch. Both endpoints check both body keys, and a task the API does not
+resolve raises rather than producing a header-only transcript at exit 0.
+
+**Requests are bounded and retried.** Two minutes per request, three attempts with exponential
+backoff on 429/5xx and network errors, nothing retried on a 4xx or the login page. Pagination stops
+on a repeated cursor or 200 pages, so a server that never signals the end cannot loop forever.
 
 **History is enormous.** ~90 KB of styled HTML per comment, ~4.5 MB per page. Pages are normalized
 and discarded one at a time; nothing accumulates raw entries.

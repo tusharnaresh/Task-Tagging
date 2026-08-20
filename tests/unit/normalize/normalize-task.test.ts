@@ -161,6 +161,86 @@ describe('TaskNormalizer', () => {
 		expect(meta.roleCounts).toMatchObject({ agent: 1, client: 1, system: 1 });
 	});
 
+	// History is queried newest-first, so a staff member's `ownerName` entry routinely lands on a
+	// later page than their chat turn. Resolving roles per page labelled those turns `client`.
+	it('attributes a chat speaker from a staff directory entry that only arrives on a later page', () => {
+		const chatPage = buildEntry({
+			interactionId: 'entry-chat',
+			subType: ['note'],
+			createdDate: 1_780_000_010_000,
+			historyComments: '<label>Visitor</label><p>Can someone call me back?</p><label>Marguerite Delacroix</label><p>Calling you now.</p>',
+		});
+		const olderPage = buildEntry({
+			interactionId: 'entry-older',
+			subType: ['note'],
+			createdDate: 1_780_000_009_000,
+			ownerName: 'Marguerite Delacroix',
+			historyComments: '<p>Opened the callback request.</p>',
+		});
+
+		const normalizer = new TaskNormalizer('task-1');
+		normalizer.addPage([chatPage]);
+		normalizer.addPage([olderPage]);
+		const marguerite = normalizer
+			.build(null)
+			.comments.find((comment) => comment.sourceInteractionId === 'entry-chat' && comment.speakerName === 'Marguerite Delacroix');
+
+		expect(marguerite).toMatchObject({ speakerRole: 'agent', roleBasis: 'speaker:staff-directory' });
+	});
+
+	it('attributes the same chat identically whichever page the directory entry arrives on', () => {
+		const chatPage = buildEntry({
+			interactionId: 'entry-chat',
+			subType: ['note'],
+			createdDate: 1_780_000_010_000,
+			historyComments: '<label>Visitor</label><p>Can someone call me back?</p><label>Marguerite Delacroix</label><p>Calling you now.</p>',
+		});
+		const ownerPage = buildEntry({
+			interactionId: 'entry-owner',
+			subType: ['note'],
+			createdDate: 1_780_000_009_000,
+			ownerName: 'Marguerite Delacroix',
+			historyComments: '<p>Opened the callback request.</p>',
+		});
+
+		const roles = (pages: Parameters<TaskNormalizer['addPage']>[0][]) => {
+			const normalizer = new TaskNormalizer('task-1');
+			for (const page of pages) {
+				normalizer.addPage(page);
+			}
+			return normalizer.build(null).comments.map((comment) => `${comment.speakerName}:${comment.speakerRole}`);
+		};
+
+		expect(roles([[chatPage], [ownerPage]])).toEqual(roles([[ownerPage], [chatPage]]));
+	});
+
+	// An undated comment sorted to 0, i.e. ahead of every real message, putting `[unknown]` where a
+	// reader — and the prompt — looks for the opening exchange.
+	it('sorts undated comments after dated ones rather than to the front', () => {
+		const undated = buildEntry({ interactionId: 'entry-undated', subType: ['note'], createdDate: 0, historyComments: '<p>No timestamp on this one.</p>' });
+		const { comments } = normalize([undated, agentNote, inboundEmail]);
+
+		expect(comments.map((comment) => comment.createdDate > 0)).toEqual([true, true, false]);
+		expect(comments.at(-1)?.text).toBe('No timestamp on this one.');
+	});
+
+	// Unlike unknown sub-types, a second status or a repeated info field was dropped with no counter,
+	// so a shape that silently loses text would not show up anywhere.
+	it('counts statuses and repeated info fields it does not read', () => {
+		const entry = buildEntry({ interactionId: 'entry-dupe', subType: ['note'], createdDate: 1, historyComments: '<p>First value.</p>' });
+		entry.interactionStatusList?.[0].interactionInfoList.push({ title: 'historyComments', value: '<p>Second value.</p>' });
+		entry.interactionStatusList?.push({ interactionInfoList: [{ title: 'historyComments', value: '<p>Third value.</p>' }] });
+
+		const { meta, comments } = normalize([entry]);
+
+		expect(comments.map((comment) => comment.text)).toEqual(['First value.']);
+		expect(meta).toMatchObject({ unreadInfoFieldCount: 1, unreadStatusCount: 1 });
+	});
+
+	it('reports nothing unread on an ordinary entry', () => {
+		expect(normalize([agentNote]).meta).toMatchObject({ unreadInfoFieldCount: 0, unreadStatusCount: 0 });
+	});
+
 	it('takes the task title from the task record when one is supplied', () => {
 		const normalizer = new TaskNormalizer('task-1');
 		normalizer.addPage([agentNote]);

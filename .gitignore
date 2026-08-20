@@ -3,6 +3,8 @@ out/
 .env
 *.log
 
-# Raw API captures. These contain live customer conversations — never commit them.
+# Raw API captures and rendered transcripts. These contain live customer conversations —
+# never commit them. Any new `--out-dir` target belongs on this list.
 scratch/
+demo/
 *.raw.json

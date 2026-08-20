@@ -32,6 +32,10 @@ export interface InteractionEntry {
 }
 
 export interface InteractionPage {
+	/** `false` on a session-scoped failure, which the history API reports under HTTP 200. */
+	success?: boolean;
+	error?: string;
+	errorMessage?: string;
 	data?: InteractionEntry[];
 	links?: { next?: { link?: string; parameters?: string } };
 }
@@ -83,7 +87,10 @@ export interface NormalizedComment {
 	/** DS sub-type of the source entry (`note`, `inboundemail`, `outboundemail`, …). */
 	subType: string | null;
 	sourceField: HistoryTextField;
-	/** Plain text. Newlines preserved, HTML and images gone. */
+	/**
+	 * Plain text: HTML and images gone. Whitespace inside a turn is collapsed to single spaces, so
+	 * a bulleted list arrives as a run-on sentence; only injected header lines carry `\n`.
+	 */
 	text: string;
 	quotedReplyTrimmed: boolean;
 	sequence: number;
@@ -110,6 +117,9 @@ export interface NormalizeMeta {
 	/** Sub-types not in the DS mapping. Kept, not dropped — counted so new ones surface. */
 	unknownSubTypeCounts: Record<string, number>;
 	missingSubTypeCount: number;
+	/** Extra `interactionStatusList` entries and repeated info fields the extractor does not read. */
+	unreadStatusCount: number;
+	unreadInfoFieldCount: number;
 	quotedRepliesTrimmed: number;
 	roleCounts: Record<SpeakerRole, number>;
 	warnings: string[];

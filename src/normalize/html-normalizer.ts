@@ -75,34 +75,49 @@ export interface ExtractEntryResult {
 
 const IMAGE_PLACEHOLDER = '[image]';
 
+/** Speaker name given to a notice the system emitted, as opposed to either side of the conversation. */
+const SYSTEM_SPEAKER = 'System';
+
+/**
+ * Closing tags that end a block of text.
+ *
+ * Splitting on these rather than matching `<p>` alone: the extractor used to take paragraphs and
+ * fall back to the whole block only when there were none at all, so a `<div>` or `<li>` sitting
+ * beside a paragraph was dropped without a warning — including, on one shape, the sentence that
+ * stated the subject. Splitting means a nested `<p>` inside a `<div>` still yields one text, since
+ * the outer close has nothing left before it.
+ *
+ * `<br>` is deliberately absent: it breaks a line within one message, not between two.
+ */
+const BLOCK_END = /<\/(?:p|div|li|td|th|tr|h[1-6]|blockquote|section|article|pre)\s*>/gi;
+
 const extractParagraphTexts = (html: string) => {
-	const paragraphTexts = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi))
-		.map((match) => normalizeWhitespace(stripHtmlTags(match[1])))
+	const texts = html
+		.split(BLOCK_END)
+		.map((segment) => normalizeWhitespace(stripHtmlTags(segment)))
 		.filter(Boolean);
 
-	if (paragraphTexts.length > 0) {
-		return paragraphTexts;
-	}
-
-	const fallbackText = normalizeWhitespace(stripHtmlTags(html));
-	return fallbackText ? [fallbackText] : [];
+	return texts;
 };
 
 const hasImage = (html: string) => /<img\b[^>]*>/i.test(html);
+
+/**
+ * `<small>` carries the turn's timestamp, not its content.
+ *
+ * It used to terminate the speaker's block instead. A timestamp printed between two paragraphs then
+ * dropped everything after it, and a timestamp printed before the text dropped the turn entirely —
+ * in both cases silently. The block now runs to the next speaker and the timestamp is removed from
+ * it; a second turn from the same speaker merges into the first, which loses no text.
+ */
+const stripTimestamps = (html: string) => html.replace(/<small\b[^>]*>[\s\S]*?<\/small\s*>/gi, ' ');
 
 const isSystemMessageText = (text: string) => {
 	const normalizedText = normalizeWhitespace(text).toLowerCase();
 	return SYSTEM_MESSAGE_PREFIXES.some((prefix) => normalizedText.startsWith(prefix));
 };
 
-const extractSystemMessages = (html: string) => {
-	const texts = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi))
-		.map((match) => normalizeWhitespace(stripHtmlTags(match[1])))
-		.filter(Boolean)
-		.filter((text) => isSystemMessageText(text));
-
-	return Array.from(new Set(texts));
-};
+const extractSystemMessages = (html: string) => Array.from(new Set(extractParagraphTexts(html).filter((text) => isSystemMessageText(text))));
 
 const extractClassText = (html: string, className: string) => {
 	const classPattern = new RegExp(`<span\\b(?=[^>]*\\bclass\\s*=\\s*["'][^"']*\\b${className}\\b[^"']*["'])[^>]*>([\\s\\S]*?)<\\/span>`, 'i');
@@ -131,9 +146,54 @@ const decodeHtmlEntitiesDeep = (input: string) => {
 	return decoded;
 };
 
+/**
+ * End offset (exclusive) of the element whose opening tag starts at `startIndex`, honouring nesting
+ * of the same tag name. Returns null when the element is never closed.
+ *
+ * The three callers below used to approximate this with "the next `</div>`" or "the end of the
+ * document". Both approximations delete the message body on ordinary nested markup.
+ */
+const findElementEnd = (html: string, startIndex: number): number | null => {
+	const openingTag = /^<([a-z][a-z0-9]*)\b[^>]*>/i.exec(html.slice(startIndex));
+	if (!openingTag) {
+		return null;
+	}
+
+	if (openingTag[0].endsWith('/>')) {
+		return startIndex + openingTag[0].length;
+	}
+
+	const tagName = openingTag[1];
+	const boundary = new RegExp(`<${tagName}\\b[^>]*>|</${tagName}\\s*>`, 'gi');
+	boundary.lastIndex = startIndex + openingTag[0].length;
+
+	let depth = 1;
+	for (let match = boundary.exec(html); match; match = boundary.exec(html)) {
+		depth += match[0].startsWith('</') ? -1 : 1;
+		if (depth === 0) {
+			return match.index + match[0].length;
+		}
+	}
+
+	return null;
+};
+
 const extractHtmlTextBody = (html: string) => {
-	const match = html.match(/<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\bhtml_text\b[^"']*["'])[^>]*>([\s\S]*?)<\/div>\s*$/i);
-	return match ? decodeHtmlEntitiesDeep(match[1]) : null;
+	// Anchoring on `</div>\s*$` meant one trailing `<br>` after the wrapper dropped the whole entry
+	// to the generic path, where the speaker becomes whoever logged it rather than who sent it.
+	const opening = /<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\bhtml_text\b[^"']*["'])[^>]*>/i.exec(html);
+	if (!opening) {
+		return null;
+	}
+
+	const startIndex = opening.index;
+	const endIndex = findElementEnd(html, startIndex);
+	if (endIndex === null) {
+		return null;
+	}
+
+	const inner = html.slice(startIndex + opening[0].length, endIndex - '</div>'.length);
+	return decodeHtmlEntitiesDeep(inner);
 };
 
 const removeElementRangeBeforeNextClass = (html: string, className: string, nextClassName: string) => {
@@ -148,8 +208,11 @@ const removeElementRangeBeforeNextClass = (html: string, className: string, next
 		return html;
 	}
 
+	// No following quote container: remove the signature element itself. Slicing to end of document
+	// here discarded every below-signature afterthought ("PS: also cancel the second line").
 	if (nextClassIndex < 0) {
-		return html.slice(0, startIndex);
+		const endIndex = findElementEnd(html, startIndex);
+		return endIndex === null ? html : `${html.slice(0, startIndex)}${html.slice(endIndex)}`;
 	}
 
 	const absoluteNextClassIndex = classIndex + nextClassIndex;
@@ -164,22 +227,70 @@ const removeElementByAttributeValue = (html: string, attributeName: string, valu
 	}
 
 	const startIndex = html.lastIndexOf('<', attributeIndex);
-	const endIndex = html.indexOf('</div>', attributeIndex);
-	if (startIndex < 0 || endIndex < 0) {
+	if (startIndex < 0) {
 		return html;
 	}
 
-	return `${html.slice(0, startIndex)}${html.slice(endIndex + '</div>'.length)}`;
+	// The end of *this* element. Taking the next `</div>` instead meant a marker nested inside a
+	// wrapper div deleted the body that shared that wrapper.
+	const endIndex = findElementEnd(html, startIndex);
+	return endIndex === null ? html : `${html.slice(0, startIndex)}${html.slice(endIndex)}`;
+};
+
+/**
+ * Removes an element by class name, wherever it sits. Used for the Gmail quote container, which
+ * `quoted-reply.ts` documented as already handled here but which nothing actually removed — so a
+ * thread whose attribution line the text-level markers do not recognise repeated in every reply.
+ */
+const removeElementByClass = (html: string, className: string) => {
+	const classIndex = html.search(new RegExp(`\\bclass\\s*=\\s*["'][^"']*\\b${className}\\b`, 'i'));
+	if (classIndex < 0) {
+		return html;
+	}
+
+	const startIndex = html.lastIndexOf('<', classIndex);
+	if (startIndex < 0) {
+		return html;
+	}
+
+	const endIndex = findElementEnd(html, startIndex);
+	return endIndex === null ? html : `${html.slice(0, startIndex)}${html.slice(endIndex)}`;
 };
 
 const sanitizeEmailBodyHtml = (html: string) => {
 	let sanitized = removeElementRangeBeforeNextClass(html, 'gmail_signature', 'gmail_quote');
+	sanitized = removeElementByClass(sanitized, 'gmail_quote');
 	sanitized = removeElementByAttributeValue(sanitized, 'id', 'user-signature-content');
 	return removeElementByAttributeValue(sanitized, 'title', 'distsource_custom_threadid');
 };
 
 const readInfoValue = (status: InteractionStatus | undefined, title: string) =>
 	status?.interactionInfoList?.find((field) => field.title === title)?.value ?? '';
+
+/**
+ * Fields and statuses this entry carries beyond the first of each, which the extractor does not
+ * read. Whether DS ever returns them is unverifiable offline; counting them means a shape that
+ * silently loses text would show up in `meta` rather than not at all.
+ */
+export const countUnreadDuplicates = (historyEntry: InteractionEntry) => {
+	const statuses = historyEntry.interactionStatusList ?? [];
+	const fields = statuses[0]?.interactionInfoList ?? [];
+	const readTitles = ['historyComments', 'resolutionComments', 'ownerName'];
+	const seen = new Set<string>();
+	let unreadFields = 0;
+
+	for (const field of fields) {
+		if (!readTitles.includes(field.title)) {
+			continue;
+		}
+		if (seen.has(field.title)) {
+			unreadFields += 1;
+		}
+		seen.add(field.title);
+	}
+
+	return { unreadStatuses: Math.max(0, statuses.length - 1), unreadFields };
+};
 
 /**
  * `historyComments` is the documented activity text, but a share of task history — call
@@ -264,15 +375,20 @@ export const extractTurnsFromEntry = (historyEntry: InteractionEntry): ExtractEn
 
 		const systemMessages = extractSystemMessages(historyHtml);
 		for (const systemMessage of systemMessages) {
-			turns.push({ speakerName: 'System', text: systemMessage, isSystemMessage: true, sourceField });
+			turns.push({ speakerName: SYSTEM_SPEAKER, text: systemMessage, isSystemMessage: true, sourceField });
 		}
 
 		const labelMatches = Array.from(historyHtml.matchAll(/<label\b[^>]*>([\s\S]*?)<\/label>/gi));
 
 		if (labelMatches.length === 0) {
-			const strippedText = normalizeWhitespace(stripHtmlTags(historyHtml));
+			// Whatever was already emitted as a notice is dropped here. Leaving it in meant the notice
+			// appeared twice, and the combined text then began with it — so `isSystemMessageText`
+			// flagged the whole turn as system, and the only turn carrying the subject was the one the
+			// prompt is told to discount.
+			const remainingTexts = extractParagraphTexts(stripTimestamps(historyHtml)).filter((text) => !systemMessages.includes(text));
+			const strippedText = remainingTexts.join(' ');
 
-			if (strippedText && !systemMessages.includes(strippedText)) {
+			if (strippedText) {
 				turns.push({
 					speakerName: ownerName ?? 'Unknown',
 					text: strippedText,
@@ -305,11 +421,8 @@ export const extractTurnsFromEntry = (historyEntry: InteractionEntry): ExtractEn
 			}
 
 			const blockStart = (currentMatch.index ?? 0) + currentMatch[0].length;
-			const nextSmallIndex = historyHtml.indexOf('<small', blockStart);
-			const nextLabelIndex = nextMatch?.index ?? historyHtml.length;
-			const candidateEnds = [nextLabelIndex, nextSmallIndex].filter((value) => value >= 0);
-			const blockEnd = candidateEnds.length > 0 ? Math.min(...candidateEnds) : historyHtml.length;
-			const bodyHtml = historyHtml.slice(blockStart, blockEnd);
+			const blockEnd = nextMatch?.index ?? historyHtml.length;
+			const bodyHtml = stripTimestamps(historyHtml.slice(blockStart, blockEnd));
 			const paragraphTexts = extractParagraphTexts(bodyHtml);
 
 			if (paragraphTexts.length === 0) {
@@ -332,7 +445,11 @@ export const extractTurnsFromEntry = (historyEntry: InteractionEntry): ExtractEn
 		}
 	}
 
-	const distinctSpeakers = new Set(turns.filter((turn) => !turn.isSystemMessage).map((turn) => turn.speakerName));
+	// Excluding every system-flagged turn collapsed a two-speaker chat to one speaker whenever one
+	// side's turn opened like a notice, which handed attribution back to the entry sub-type — and a
+	// chat is stored as a single `note`, so the client's own words came out labelled `agent`. Only
+	// the synthetic notice speaker is excluded.
+	const distinctSpeakers = new Set(turns.filter((turn) => turn.speakerName !== SYSTEM_SPEAKER).map((turn) => turn.speakerName));
 
 	return { turns, ownerName, multiSpeaker: distinctSpeakers.size > 1, warnings };
 };

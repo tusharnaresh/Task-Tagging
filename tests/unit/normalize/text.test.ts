@@ -45,6 +45,23 @@ describe('normalizeUnicode', () => {
 	});
 });
 
+describe('stripHtmlTags and angle brackets', () => {
+	// `/<[^>]+>/` treated a comparison as a tag and deleted the span between two of them.
+	it('keeps arithmetic comparisons', () => {
+		expect(stripHtmlTags('Charge is x > 5 but plan cost < 100 per seat and y > 3 total')).toBe(
+			'Charge is x > 5 but plan cost < 100 per seat and y > 3 total'
+		);
+	});
+
+	it('still removes real tags around them', () => {
+		expect(stripHtmlTags('<p>Plan cost < 100 per seat</p>')).toBe('Plan cost < 100 per seat');
+	});
+
+	it('still removes closing tags and comments', () => {
+		expect(stripHtmlTags('<div>a</div><!-- hidden -->b')).toBe('a b');
+	});
+});
+
 describe('decodeHtmlEntities', () => {
 	it('decodes named, decimal and hex entities', () => {
 		expect(decodeHtmlEntities('&lt;a&gt; &#65; &#x42;')).toBe('<a> A B');
@@ -52,5 +69,16 @@ describe('decodeHtmlEntities', () => {
 
 	it('leaves unknown entities untouched', () => {
 		expect(decodeHtmlEntities('&notarealentity;')).toBe('&notarealentity;');
+	});
+
+	// `String.fromCodePoint` throws above U+10FFFF, and the throw used to propagate out of the
+	// normalizer — one malformed entity in one comment lost the whole task's output file.
+	it('leaves an out-of-range numeric entity as literal text instead of throwing', () => {
+		expect(decodeHtmlEntities('order &#x110000; confirmed')).toBe('order &#x110000; confirmed');
+		expect(decodeHtmlEntities('order &#1114112; confirmed')).toBe('order &#1114112; confirmed');
+	});
+
+	it('still decodes the highest valid code point', () => {
+		expect(decodeHtmlEntities('&#x10FFFF;')).toBe(String.fromCodePoint(0x10ffff));
 	});
 });

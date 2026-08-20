@@ -3,6 +3,10 @@ import type { InteractionEntry } from '../src/types.ts';
 /**
  * Synthetic history entries shaped like the live `/v1/Interaction` payload.
  *
+ * No `isDeleted` flag: deleted entries are filtered server-side by the `isDeleted=false` query
+ * parameter in `ds-client.ts`, and no source file reads the field. A fixture carrying one implied a
+ * local guard that does not exist.
+ *
  * These are hand-written on purpose. Real captures carry live customer conversations, so they are
  * never committed; the structure here mirrors what the API returns (verified against task
  * 73a6ff24 on 2026-08-17) while the content is invented.
@@ -15,7 +19,6 @@ export const buildEntry = ({
 	resolutionComments,
 	taskComments,
 	ownerName,
-	isDeleted = false,
 }: {
 	interactionId: string;
 	subType?: string | string[];
@@ -24,7 +27,6 @@ export const buildEntry = ({
 	resolutionComments?: string;
 	taskComments?: string;
 	ownerName?: string;
-	isDeleted?: boolean;
 }): InteractionEntry => ({
 	interactionId,
 	accountId: 'SEN42',
@@ -32,7 +34,6 @@ export const buildEntry = ({
 		{
 			interactionId,
 			createdDate,
-			isDeleted,
 			type: { id: 'c3595da3-0494-4e08-85f8-6d88ce98c715', value: 'Task' },
 			customProperty: subType === undefined ? {} : { subType, linkedTask: ['task-1'] },
 			interactionInfoList: [

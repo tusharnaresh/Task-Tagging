@@ -1,9 +1,21 @@
 import type { DsTask, InteractionEntry, NormalizeMeta, NormalizedComment, NormalizedTask, SpeakerRole } from '../types.ts';
-import { extractTurnsFromEntry } from './html-normalizer.ts';
+import { countUnreadDuplicates, extractTurnsFromEntry } from './html-normalizer.ts';
 import { partitionHistoryByMasterType, resolveSubType } from './master-type.ts';
 import { stripQuotedReplyChain } from './quoted-reply.ts';
 import { normalizeDirectoryKey } from './speaker-classifier.ts';
 import { resolveRole } from './speaker-role.ts';
+
+/**
+ * A comment with everything decided except who spoke.
+ *
+ * Role resolution consults `staffDirectory`, which is only complete once every page has been
+ * folded in, so the two inputs that are not already on the comment are carried here until `build`.
+ */
+interface PendingComment {
+	comment: Omit<NormalizedComment, 'speakerRole' | 'roleBasis'>;
+	isSystemMessage: boolean;
+	multiSpeakerEntry: boolean;
+}
 
 /**
  * Accumulates normalized comments across history pages.
@@ -12,7 +24,7 @@ import { resolveRole } from './speaker-role.ts';
  * across four pages, so nothing keeps a reference to the raw entries once a page is folded in.
  */
 export class TaskNormalizer {
-	private readonly comments: NormalizedComment[] = [];
+	private readonly pending: PendingComment[] = [];
 	private readonly warnings: string[] = [];
 	private readonly unknownSubTypeCounts: Record<string, number> = {};
 	private readonly staffDirectory = new Set<string>();
@@ -21,6 +33,8 @@ export class TaskNormalizer {
 	private droppedLogEntries = 0;
 	private missingSubTypeCount = 0;
 	private quotedRepliesTrimmed = 0;
+	private unreadStatusCount = 0;
+	private unreadInfoFieldCount = 0;
 	private sequence = 0;
 
 	constructor(private readonly taskId: string) {}
@@ -56,6 +70,9 @@ export class TaskNormalizer {
 		const createdDate = status?.createdDate ?? 0;
 		const subType = resolveSubType(entry);
 		const { turns, multiSpeaker, warnings } = extractTurnsFromEntry(entry);
+		const unread = countUnreadDuplicates(entry);
+		this.unreadStatusCount += unread.unreadStatuses;
+		this.unreadInfoFieldCount += unread.unreadFields;
 
 		this.warnings.push(...warnings);
 
@@ -69,27 +86,21 @@ export class TaskNormalizer {
 				this.quotedRepliesTrimmed += 1;
 			}
 
-			const { role, basis } = resolveRole({
-				speakerName: turn.speakerName,
+			this.pending.push({
+				comment: {
+					commentId: `${entry.interactionId}:${this.sequence}`,
+					sourceInteractionId: entry.interactionId,
+					createdDate,
+					createdAt: createdDate ? new Date(createdDate).toISOString() : '',
+					speakerName: turn.speakerName,
+					subType,
+					sourceField: turn.sourceField,
+					text,
+					quotedReplyTrimmed: trimmed,
+					sequence: this.sequence,
+				},
 				isSystemMessage: turn.isSystemMessage,
-				subType,
 				multiSpeakerEntry: multiSpeaker,
-				staffDirectory: this.staffDirectory,
-			});
-
-			this.comments.push({
-				commentId: `${entry.interactionId}:${this.sequence}`,
-				sourceInteractionId: entry.interactionId,
-				createdDate,
-				createdAt: createdDate ? new Date(createdDate).toISOString() : '',
-				speakerName: turn.speakerName,
-				speakerRole: role,
-				roleBasis: basis,
-				subType,
-				sourceField: turn.sourceField,
-				text,
-				quotedReplyTrimmed: trimmed,
-				sequence: this.sequence,
 			});
 
 			this.sequence += 1;
@@ -100,9 +111,35 @@ export class TaskNormalizer {
 	 * The API is queried newest-first (`order=DESC`) because that is the only ordering its cursor
 	 * pagination is verified against; the conversation is re-sorted oldest-first here, which is the
 	 * order anything reading it will expect. Entries sharing a timestamp keep extraction order.
+	 *
+	 * Roles are resolved here rather than per page. `staffDirectory` is filled page by page, so a
+	 * staff member whose `ownerName` entry lands on a later page than their chat turn would be
+	 * classified by name shape — and, on the newest-first ordering, labelled `client`. Resolving
+	 * once the directory is complete makes attribution independent of page boundaries.
 	 */
 	build(task: DsTask | null): NormalizedTask {
-		const comments = [...this.comments].sort((a, b) => a.createdDate - b.createdDate || a.sequence - b.sequence);
+		const comments = this.pending
+			.map(({ comment, isSystemMessage, multiSpeakerEntry }): NormalizedComment => {
+				const { role, basis } = resolveRole({
+					speakerName: comment.speakerName,
+					isSystemMessage,
+					subType: comment.subType,
+					multiSpeakerEntry,
+					staffDirectory: this.staffDirectory,
+				});
+
+				return { ...comment, speakerRole: role, roleBasis: basis };
+			})
+			// An undated comment has `createdDate` 0, which would sort it ahead of every real message
+			// in an oldest-first transcript — putting `[unknown]` where the opening exchange belongs,
+			// which is exactly where a reader looks for the subject. Undated goes last instead.
+			.sort((a, b) => {
+				if (!a.createdDate !== !b.createdDate) {
+					return a.createdDate ? -1 : 1;
+				}
+
+				return a.createdDate - b.createdDate || a.sequence - b.sequence;
+			});
 
 		const roleCounts: Record<SpeakerRole, number> = { client: 0, agent: 0, system: 0, unknown: 0 };
 		for (const comment of comments) {
@@ -116,6 +153,8 @@ export class TaskNormalizer {
 			droppedLogEntries: this.droppedLogEntries,
 			unknownSubTypeCounts: this.unknownSubTypeCounts,
 			missingSubTypeCount: this.missingSubTypeCount,
+			unreadStatusCount: this.unreadStatusCount,
+			unreadInfoFieldCount: this.unreadInfoFieldCount,
 			quotedRepliesTrimmed: this.quotedRepliesTrimmed,
 			roleCounts,
 			warnings: this.warnings,

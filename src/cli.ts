@@ -81,6 +81,11 @@ const parseArgs = (argv: string[]): Args => {
 	for (let index = 0; index < argv.length; index += 1) {
 		const token = argv[index];
 
+		if (token === '-h') {
+			args.help = true;
+			continue;
+		}
+
 		if (!token.startsWith('--')) {
 			args.taskIds.push(token);
 			continue;
@@ -129,9 +134,15 @@ const parseArgs = (argv: string[]): Args => {
 			case '--sub-type':
 				args.subType = readValue();
 				break;
-			case '--page-size':
-				args.pageSize = Number.parseInt(readValue(), 10);
+			case '--page-size': {
+				const value = readValue();
+				const pageSize = Number.parseInt(value, 10);
+				if (!Number.isInteger(pageSize) || pageSize < 1) {
+					throw new Error(`--page-size must be a positive integer, received "${value}".`);
+				}
+				args.pageSize = pageSize;
 				break;
+			}
 			default:
 				throw new Error(`Unknown option ${token}. Run with --help.`);
 		}
@@ -201,6 +212,14 @@ const main = async () => {
 
 	for (const [index, taskId] of taskIds.entries()) {
 		const label = `[${index + 1}/${taskIds.length}] ${taskId}`;
+
+		// Ids become output filenames, and `--ids-file` is an arbitrary text file. A `../` in one
+		// would write outside `--out-dir` entirely.
+		if (!/^[A-Za-z0-9._-]+$/.test(taskId) || taskId.startsWith('.')) {
+			failures += 1;
+			process.stderr.write(`${label}: FAILED — not a usable task id; ids may contain only letters, digits, '.', '_' and '-'.\n`);
+			continue;
+		}
 
 		try {
 			const normalized = await normalizeOneTask(client, taskId);
